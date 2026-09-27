@@ -429,6 +429,14 @@ async function hmac(value: Uint8Array): Promise<Uint8Array> {
 }
 
 function publicBase(url: URL): string {
+  const configured = Deno.env.get("PUBLIC_BASE_URL")?.trim().replace(/\/+$/, "");
+  if (configured) return configured;
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim().replace(/\/+$/, "");
+  if (supabaseUrl) {
+    return `${supabaseUrl}/functions/v1/flux-proxy`;
+  }
+
   const marker = url.pathname.lastIndexOf("/v1/");
   const healthMarker = url.pathname.endsWith("/health")
     ? url.pathname.length - "/health".length

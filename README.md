@@ -35,6 +35,7 @@ GITHUB_REPOSITORY=lifestylekky/Life-Style-AI
 GITHUB_BRANCH=assets
 PROXY_SIGNING_SECRET
 APP_CLIENT_TOKEN
+PUBLIC_BASE_URL=https://xlgkxryniiokathvmtxo.supabase.co/functions/v1/flux-proxy
 ```
 
 The GitHub token needs access only to `lifestylekky/Life-Style-AI` with
