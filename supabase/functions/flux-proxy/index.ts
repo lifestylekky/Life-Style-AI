@@ -48,6 +48,9 @@ Deno.serve(async (request) => {
     if (request.method === "POST" && url.pathname.endsWith("/v1/assets")) {
       return await storeAsset(request);
     }
+    if (request.method === "GET" && url.pathname.endsWith("/v1/prompts")) {
+      return await loadPrompts();
+    }
     if (request.method === "GET" && url.pathname.endsWith("/v1/products")) {
       return await loadProducts();
     }
@@ -171,6 +174,18 @@ async function loadProducts(): Promise<Response> {
       messages: grouped.get(String(product.id ?? "")) ?? [],
     })),
   });
+}
+
+async function loadPrompts(): Promise<Response> {
+  const endpoint = restUrl("ai_prompt_profiles");
+  endpoint.searchParams.set("select", "key,category,title,content,version,updated_at");
+  endpoint.searchParams.set("enabled", "eq.true");
+  endpoint.searchParams.set("order", "category.asc,key.asc");
+  const response = await fetch(endpoint, { headers: serviceRoleHeaders() });
+  if (!response.ok) {
+    throw new Error(`Prompt profile load failed (${response.status}): ${await response.text()}`);
+  }
+  return json({ prompts: await response.json() as Array<Record<string, unknown>> });
 }
 
 async function syncProduct(request: Request): Promise<Response> {

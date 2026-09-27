@@ -15,6 +15,7 @@ class InventoryPage extends StatefulWidget {
 class _InventoryPageState extends State<InventoryPage>
     with SingleTickerProviderStateMixin {
   final TextEditingController _search = TextEditingController();
+  bool _gridView = true;
   late final AnimationController _flow = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 10),
@@ -103,6 +104,14 @@ class _InventoryPageState extends State<InventoryPage>
         ),
         actions: [
           LiquidIconButton(
+            icon: _gridView
+                ? Icons.view_list_outlined
+                : Icons.grid_view_rounded,
+            onTap: () => setState(() => _gridView = !_gridView),
+            tooltip: _gridView ? 'List view' : 'Grid view',
+          ),
+          const SizedBox(width: 8),
+          LiquidIconButton(
             icon: Icons.add_photo_alternate_rounded,
             onTap: _pickImages,
             tooltip: 'Upload images',
@@ -142,6 +151,23 @@ class _InventoryPageState extends State<InventoryPage>
                         return _emptyState();
                       }
                       if (products.isEmpty) return _noSearchResults();
+                      if (_gridView) {
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                          itemCount: products.length,
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: .76,
+                              ),
+                          itemBuilder: (context, i) => _ProductGridCard(
+                            product: products[i],
+                            onDelete: () => _confirmDelete(products[i]),
+                          ),
+                        );
+                      }
                       return ListView.builder(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                         itemCount: products.length,
@@ -227,6 +253,94 @@ class _SearchBar extends StatelessWidget {
             weight: FontWeight.w300,
           ),
           border: InputBorder.none,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProductGridCard extends StatelessWidget {
+  const _ProductGridCard({required this.product, required this.onDelete});
+
+  final Product product;
+  final Future<bool> Function() onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => ProductPage(productId: product.id)),
+        ),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: surfaceColor.withValues(alpha: .84),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withValues(alpha: .08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(8),
+                      ),
+                      child: product.productImage != null
+                          ? Image.memory(
+                              product.productImage!,
+                              fit: BoxFit.cover,
+                            )
+                          : Container(
+                              color: Colors.white.withValues(alpha: .04),
+                              child: const Icon(
+                                Icons.image_outlined,
+                                color: Colors.white38,
+                              ),
+                            ),
+                    ),
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: IconButton.filledTonal(
+                        tooltip: 'Delete product',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          onDelete();
+                        },
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 17,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: jost(fontSize: 14, weight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 7),
+                    _LayerBadges(product: product),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

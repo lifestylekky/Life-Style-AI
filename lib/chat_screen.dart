@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:file_saver/file_saver.dart';
 import 'package:flutter/foundation.dart';
@@ -35,10 +36,87 @@ typedef ProductImageRequest =
 typedef PosterReferenceBuilder =
     Future<Uint8List> Function(List<Uint8List> images);
 
+typedef ReferenceMatchRequest =
+    Future<bool> Function({
+      required Uint8List savedProduct,
+      required Uint8List newReference,
+    });
+
+typedef ColorVariantPromptRequest =
+    Future<String> Function({
+      required Product product,
+      required ProductColorVariant color,
+      required Uint8List reference,
+    });
+
 Future<Uint8List> _buildPosterReferenceBoard(List<Uint8List> images) =>
     compute(buildReferenceBoard, images);
 
 enum ChatActionMode { chat, productImage, detectColors, poster }
+
+class _ParsedColorSet {
+  const _ParsedColorSet(this.summary, this.colors);
+
+  final String summary;
+  final List<ProductColorVariant> colors;
+}
+
+_ParsedColorSet _parseColorSet(String value) {
+  var cleaned = value.trim();
+  cleaned = cleaned.replaceFirst(RegExp(r'^```(?:json)?\s*'), '');
+  cleaned = cleaned.replaceFirst(RegExp(r'\s*```$'), '');
+  try {
+    final decoded = jsonDecode(cleaned);
+    if (decoded is Map<String, dynamic>) {
+      final colors = <ProductColorVariant>[];
+      final records = decoded['colors'];
+      if (records is List) {
+        for (final record in records.whereType<Map<String, dynamic>>()) {
+          final name = record['name']?.toString().trim() ?? '';
+          if (name.isEmpty) continue;
+          colors.add(
+            ProductColorVariant(
+              name: name,
+              hex: _validHex(record['hex']?.toString()),
+              generationInstruction:
+                  record['generation_instruction']?.toString().trim() ?? '',
+            ),
+          );
+        }
+      }
+      final summary = decoded['summary']?.toString().trim() ?? '';
+      if (colors.isNotEmpty) {
+        return _ParsedColorSet(
+          summary.isNotEmpty ? summary : _colorSummary(colors),
+          colors,
+        );
+      }
+    }
+  } catch (_) {}
+
+  final listing = RegExp(
+    r'LISTING COLOURS?\s*:\s*(.+)',
+    caseSensitive: false,
+  ).firstMatch(cleaned)?.group(1);
+  final names = (listing ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty && item.toLowerCase() != 'none')
+      .toList();
+  return _ParsedColorSet(cleaned, [
+    for (final name in names) ProductColorVariant(name: name),
+  ]);
+}
+
+String _validHex(String? value) {
+  final normalized = value?.trim().toUpperCase() ?? '';
+  return RegExp(r'^#[0-9A-F]{6}$').hasMatch(normalized)
+      ? normalized
+      : '#808080';
+}
+
+String _colorSummary(List<ProductColorVariant> colors) =>
+    'LISTING COLOURS: ${colors.map((color) => color.name).join(', ')}';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -50,6 +128,8 @@ class ChatScreen extends StatefulWidget {
     this.posterPromptRequest = AiService.posterPrompt,
     this.productImageRequest = FluxService.generateProductImage,
     this.productNameRequest = AiService.identifyProductName,
+    this.referenceMatchRequest = AiService.referenceMatches,
+    this.colorVariantPromptRequest = AiService.colorVariantPrompt,
     this.posterReferenceBuilder = _buildPosterReferenceBoard,
   });
 
@@ -60,6 +140,8 @@ class ChatScreen extends StatefulWidget {
   final ChatRequest posterPromptRequest;
   final ProductImageRequest productImageRequest;
   final Future<String> Function(Uint8List image) productNameRequest;
+  final ReferenceMatchRequest referenceMatchRequest;
+  final ColorVariantPromptRequest colorVariantPromptRequest;
   final PosterReferenceBuilder posterReferenceBuilder;
 
   @override
@@ -84,6 +166,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   ProductImageSize _imageSize = ProductImageSize.square;
   bool _sending = false;
   bool _detectingProductName = false;
+  bool _summarizingMemory = false;
 
   static const List<Map<String, String>> _suggestions = [
     {
@@ -181,7 +264,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() {});
       if (createProducts) _openInventory();
-      if (!createProducts && firstChatImage != null) {
+      if (!createProducts &&
+          firstChatImage != null &&
+          widget.product?.productImage == null) {
         unawaited(_identifyProductFromFirstImage(firstChatImage));
       }
     } catch (e) {
@@ -197,7 +282,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (!_canSend) return;
     final text = _input.text.trim();
     final images = List<Uint8List>.from(_attachedImages);
-    if (images.isNotEmpty) {
+    if (images.isNotEmpty && widget.product?.productImage == null) {
       unawaited(_identifyProductFromFirstImage(images.first));
     }
     final imageCount = images.length;
@@ -260,6 +345,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     // image bytes for the network request.
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
+    if (!await _referenceIsValid(images, pendingMessage)) return;
+
     switch (action) {
       case ChatActionMode.productImage:
         await _completeImageRequest(
@@ -316,10 +403,53 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
   }
 
+  Future<bool> _referenceIsValid(
+    List<Uint8List> images,
+    ChatMessage pendingMessage,
+  ) async {
+    final product = widget.product;
+    if (product?.productImage == null || images.isEmpty) return true;
+    try {
+      final matches = await widget.referenceMatchRequest(
+        savedProduct: product!.productImage!,
+        newReference: images.first,
+      );
+      if (matches) return true;
+      _finishPending(
+        pendingMessage,
+        ChatMessage(
+          text:
+              'This reference appears to be a different product from ${product.name}. Create a new product from Inventory so its images, colours, descriptions, and memory stay separate.',
+          isUser: false,
+          imageBytesList: [product.productImage!, images.first],
+          actionName: ChatActionMode.chat.name,
+        ),
+      );
+      return false;
+    } catch (_) {
+      // A comparison outage should not block a user-requested generation.
+      return true;
+    }
+  }
+
   List<ChatMessage> _conversationHistory() {
-    return _messages
+    final textMessages = _messages
         .where((message) => message.kind == ChatMessageKind.text)
         .toList();
+    if (widget.product?.memorySummary.isNotEmpty == true) {
+      return textMessages.length <= 4
+          ? textMessages
+          : textMessages.sublist(textMessages.length - 4);
+    }
+    final selected = <ChatMessage>[];
+    var words = 0;
+    for (final message in textMessages.reversed) {
+      final count = message.text.trim().split(RegExp(r'\s+')).length;
+      if (selected.isNotEmpty && words + count > 100) break;
+      selected.add(message);
+      words += count;
+    }
+    return selected.reversed.toList();
   }
 
   void _record(ChatMessage message) {
@@ -400,8 +530,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       );
       if (widget.product != null) {
         widget.product!
-          ..posterImage = generated.bytes
-          ..posterImageUrl = null;
+          ..productImage = generated.bytes
+          ..productImageUrl = null;
       }
       _finishPending(pendingMessage, replyMessage);
     } catch (error) {
@@ -430,13 +560,18 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         images: images,
         history: history,
       );
+      final analysis = _parseColorSet(result);
       if (widget.product != null) {
-        widget.product!.detectedColorSet = result.trim();
+        final currentProduct = widget.product!;
+        currentProduct.detectedColorSet = analysis.summary;
+        currentProduct.colorVariants
+          ..clear()
+          ..addAll(analysis.colors);
       }
       _finishPending(
         pendingMessage,
         ChatMessage(
-          text: result.trim(),
+          text: analysis.summary,
           isUser: false,
           prompt: text,
           actionName: ChatActionMode.detectColors.name,
@@ -548,6 +683,69 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     return references;
   }
 
+  Future<void> _generateColorVariant(ProductColorVariant color) async {
+    final product = widget.product;
+    final reference = product?.productImage;
+    if (product == null || reference == null || color.isGenerating) return;
+    setState(() {
+      color
+        ..isGenerating = true
+        ..progress = 1
+        ..error = null;
+    });
+    try {
+      final prompt = await widget.colorVariantPromptRequest(
+        product: product,
+        color: color,
+        reference: reference,
+      );
+      final generated = await widget.productImageRequest(
+        prompt: prompt,
+        size: _imageSize,
+        referenceImage: reference,
+        onProgress: (progress) {
+          color.progress = progress;
+          if (mounted) setState(() {});
+        },
+      );
+      color
+        ..imageBytes = generated.bytes
+        ..imageUrl = null
+        ..progress = 100;
+      final firstGenerated = product.colorVariants.firstWhere(
+        (item) => item.imageBytes != null,
+        orElse: () => color,
+      );
+      product
+        ..colorSetImage = firstGenerated.imageBytes
+        ..colorSetImageUrl = firstGenerated.imageUrl;
+      ProductStore.instance.touch(product);
+    } catch (error) {
+      color.error = '$error';
+    } finally {
+      color.isGenerating = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _generateColorBatch({required bool selectedOnly}) async {
+    final product = widget.product;
+    if (product == null) return;
+    final colors = product.colorVariants
+        .where((color) => !selectedOnly || color.selected)
+        .toList();
+    if (colors.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select at least one colour first')),
+      );
+      return;
+    }
+    for (final color in colors) {
+      if (!mounted) break;
+      await _generateColorVariant(color);
+    }
+  }
+
   void _updatePending(
     ChatMessage pendingMessage, {
     required ChatMessageKind kind,
@@ -580,11 +778,62 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       if (widget.product != null) {
         _replacePending(widget.product!.chat, pendingMessage, replyMessage);
         ProductStore.instance.touch(widget.product!);
+        unawaited(_refreshProductMemory());
       }
       return;
     }
     setState(finishRequest);
+    unawaited(_refreshProductMemory());
     _scrollToBottom();
+  }
+
+  Future<void> _refreshProductMemory() async {
+    final product = widget.product;
+    if (product == null || _summarizingMemory) return;
+    final completed = product.chat
+        .where((message) => message.kind == ChatMessageKind.text)
+        .toList();
+    if (completed.isEmpty) return;
+    final newest = completed.last;
+    if (product.memoryLastMessageId == newest.id) return;
+    final totalWords = completed.fold<int>(
+      0,
+      (total, message) =>
+          total + message.text.trim().split(RegExp(r'\s+')).length,
+    );
+    if (product.memorySummary.isEmpty && totalWords <= 100) return;
+
+    var start = 0;
+    if (product.memorySummary.isNotEmpty &&
+        product.memoryLastMessageId != null) {
+      final covered = completed.indexWhere(
+        (message) => message.id == product.memoryLastMessageId,
+      );
+      if (covered >= 0) start = covered + 1;
+    }
+    var updates = completed.sublist(start);
+    if (updates.isEmpty) return;
+    if (product.memorySummary.isNotEmpty && updates.length > 2) {
+      updates = updates.sublist(updates.length - 2);
+    } else if (updates.length > 10) {
+      updates = updates.sublist(updates.length - 10);
+    }
+
+    _summarizingMemory = true;
+    try {
+      final summary = await AiService.summarizeProductMemory(
+        product: product,
+        messages: updates,
+      );
+      product
+        ..memorySummary = summary
+        ..memoryLastMessageId = newest.id;
+      ProductStore.instance.touch(product);
+    } catch (_) {
+      // Memory maintenance is silent and must never interrupt the chat.
+    } finally {
+      _summarizingMemory = false;
+    }
   }
 
   static bool _replacePending(
@@ -747,13 +996,45 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
   }
 
+  Future<void> _downloadColorVariant(ProductColorVariant color) async {
+    final bytes = color.imageBytes;
+    if (bytes == null) return;
+    final productName = (widget.product?.name ?? 'product')
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '')
+        .toLowerCase();
+    final colorName = color.name
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '')
+        .toLowerCase();
+    try {
+      await FileSaver.instance.saveAs(
+        name:
+            '${productName.isEmpty ? 'product' : productName}_${colorName.isEmpty ? 'colour' : colorName}',
+        bytes: bytes,
+        fileExtension: 'jpg',
+        mimeType: MimeType.jpeg,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Colour image downloaded')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not download image: $error')),
+        );
+      }
+    }
+  }
+
   void _useGeneratedImageAsReference(ChatMessage message) {
     if (message.imageBytesList.isEmpty || _sending) return;
     setState(() {
       for (final image in message.imageBytesList) {
-        if (!_attachedImages.any((item) => listEquals(item, image))) {
-          _attachedImages.add(image);
-        }
+        _attachedImages.removeWhere((item) => listEquals(item, image));
+        _attachedImages.add(Uint8List.fromList(image));
       }
       _actionMode = ChatActionMode.productImage;
     });
@@ -766,6 +1047,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     FocusManager.instance.primaryFocus?.unfocus();
     final selection = await showModalBottomSheet<_ComposerActionSelection>(
       context: context,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * .86,
+      ),
       backgroundColor: const Color(0xFF10121A),
       barrierColor: Colors.black.withValues(alpha: .68),
       showDragHandle: true,
@@ -930,65 +1214,116 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildMessageList() {
+    final latestColorIndex = _messages.lastIndexWhere(
+      (message) =>
+          !message.isUser &&
+          message.kind == ChatMessageKind.text &&
+          message.actionName == ChatActionMode.detectColors.name,
+    );
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       itemCount: _messages.length,
-      itemBuilder: (context, i) => _MessageBubble(
-        key: ObjectKey(_messages[i]),
-        message: _messages[i],
-        onEdit: () => _editMessage(i),
-        onRegenerate: () => _regenerateMessage(i),
-        onCopy: () => _copyMessage(_messages[i]),
-        onShare: () => _shareMessage(_messages[i]),
-        onDownloadImage: () => _downloadGeneratedImage(_messages[i]),
-        onUseAsReference: () => _useGeneratedImageAsReference(_messages[i]),
-      ),
+      itemBuilder: (context, i) {
+        final message = _messages[i];
+        return Column(
+          key: ObjectKey(message),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _MessageBubble(
+              message: message,
+              onEdit: () => _editMessage(i),
+              onRegenerate: () => _regenerateMessage(i),
+              onCopy: () => _copyMessage(message),
+              onShare: () => _shareMessage(message),
+              onDownloadImage: () => _downloadGeneratedImage(message),
+              onUseAsReference: () => _useGeneratedImageAsReference(message),
+            ),
+            if (i == latestColorIndex &&
+                widget.product?.colorVariants.isNotEmpty == true)
+              _ColorSetPanel(
+                colors: widget.product!.colorVariants,
+                onToggle: (color) {
+                  setState(() => color.selected = !color.selected);
+                  ProductStore.instance.touch(widget.product!);
+                },
+                onGenerate: _generateColorVariant,
+                onDownload: _downloadColorVariant,
+                onGenerateAll: () => _generateColorBatch(selectedOnly: false),
+                onGenerateSelected: () =>
+                    _generateColorBatch(selectedOnly: true),
+              ),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildAttachmentStrip() {
     return SizedBox(
-      height: 76,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-        scrollDirection: Axis.horizontal,
-        itemCount: _attachedImages.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, i) => Stack(
-          children: [
-            GestureDetector(
-              onTap: () => showImageViewer(
-                context,
-                images: _attachedImages,
-                initialIndex: i,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.memory(
-                  _attachedImages[i],
-                  width: 60,
-                  height: 60,
-                  fit: BoxFit.cover,
-                ),
-              ),
+      key: ValueKey('attachments-${_attachedImages.length}'),
+      height: 96,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 2, 18, 0),
+            child: Text(
+              'Selected references · ${_attachedImages.length}',
+              style: jost(fontSize: 11, color: mutedText),
             ),
-            Positioned(
-              right: 2,
-              top: 2,
-              child: GestureDetector(
-                onTap: () => setState(() => _attachedImages.removeAt(i)),
-                child: Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.black54,
-                    shape: BoxShape.circle,
+          ),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+              scrollDirection: Axis.horizontal,
+              itemCount: _attachedImages.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
+              itemBuilder: (context, i) => Stack(
+                children: [
+                  GestureDetector(
+                    onTap: () => showImageViewer(
+                      context,
+                      images: _attachedImages,
+                      initialIndex: i,
+                    ),
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF64E9FF)),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.memory(
+                          _attachedImages[i],
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        ),
+                      ),
+                    ),
                   ),
-                  child: const Icon(Icons.close, size: 16),
-                ),
+                  Positioned(
+                    right: 2,
+                    top: 2,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _attachedImages.removeAt(i)),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Colors.black87,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close, size: 16),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1417,9 +1752,221 @@ class _SuggestionCard extends StatelessWidget {
   }
 }
 
+class _ColorSetPanel extends StatelessWidget {
+  const _ColorSetPanel({
+    required this.colors,
+    required this.onToggle,
+    required this.onGenerate,
+    required this.onDownload,
+    required this.onGenerateAll,
+    required this.onGenerateSelected,
+  });
+
+  final List<ProductColorVariant> colors;
+  final ValueChanged<ProductColorVariant> onToggle;
+  final Future<void> Function(ProductColorVariant) onGenerate;
+  final Future<void> Function(ProductColorVariant) onDownload;
+  final VoidCallback onGenerateAll;
+  final VoidCallback onGenerateSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = colors.any((color) => color.isGenerating);
+    final selectedCount = colors.where((color) => color.selected).length;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: surfaceColor.withValues(alpha: .9),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: .09)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.palette_outlined,
+                  size: 18,
+                  color: Color(0xFF64E9FF),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${colors.length} extracted colours',
+                  style: jost(fontSize: 13, weight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  '$selectedCount selected',
+                  style: jost(fontSize: 11, color: mutedText),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            for (final color in colors) ...[
+              _ColorVariantRow(
+                color: color,
+                enabled: !busy || color.isGenerating,
+                onToggle: () => onToggle(color),
+                onGenerate: () => onGenerate(color),
+                onDownload: () => onDownload(color),
+              ),
+              if (color != colors.last) const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: busy ? null : onGenerateAll,
+                    icon: const Icon(Icons.playlist_play_rounded, size: 19),
+                    label: const Text('Generate all'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: busy || selectedCount == 0
+                        ? null
+                        : onGenerateSelected,
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 17),
+                    label: const Text('Selected'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ColorVariantRow extends StatelessWidget {
+  const _ColorVariantRow({
+    required this.color,
+    required this.enabled,
+    required this.onToggle,
+    required this.onGenerate,
+    required this.onDownload,
+  });
+
+  final ProductColorVariant color;
+  final bool enabled;
+  final VoidCallback onToggle;
+  final VoidCallback onGenerate;
+  final VoidCallback onDownload;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = int.tryParse(color.hex.replaceFirst('#', ''), radix: 16);
+    final swatch = Color(0xFF000000 | (value ?? 0x808080));
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .035),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: color.selected
+              ? const Color(0xFF64E9FF).withValues(alpha: .42)
+              : Colors.white.withValues(alpha: .06),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Checkbox(
+                value: color.selected,
+                onChanged: enabled ? (_) => onToggle() : null,
+                visualDensity: VisualDensity.compact,
+              ),
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: swatch,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  color.name,
+                  style: jost(fontSize: 13.5, weight: FontWeight.w600),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Generate ${color.name}',
+                onPressed: enabled && !color.isGenerating ? onGenerate : null,
+                icon: color.isGenerating
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          value: color.progress > 0
+                              ? color.progress / 100
+                              : null,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.play_arrow_rounded),
+              ),
+              if (color.imageBytes != null)
+                IconButton(
+                  tooltip: 'Download ${color.name}',
+                  onPressed: color.isGenerating ? null : onDownload,
+                  icon: const Icon(Icons.download_rounded, size: 19),
+                ),
+            ],
+          ),
+          if (color.isGenerating) ...[
+            const SizedBox(height: 4),
+            LinearProgressIndicator(
+              value: color.progress > 0 ? color.progress / 100 : null,
+              minHeight: 3,
+            ),
+          ],
+          if (color.imageBytes != null) ...[
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => showImageViewer(
+                context,
+                images: [color.imageBytes!],
+                title: color.name,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: Image.memory(color.imageBytes!, fit: BoxFit.cover),
+                ),
+              ),
+            ),
+          ],
+          if (color.error != null) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Generation failed. Tap play to retry.',
+                style: jost(fontSize: 11, color: const Color(0xFFFF8A96)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
-    super.key,
     required this.message,
     required this.onEdit,
     required this.onRegenerate,

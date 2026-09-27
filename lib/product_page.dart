@@ -189,6 +189,12 @@ class _ProductPageState extends State<ProductPage>
                       onChanged: (i) => setState(() => _imageIndex = i),
                       onPick: _pickImage,
                     ),
+                    if (p.colorVariants.any(
+                      (variant) => variant.imageBytes != null,
+                    )) ...[
+                      const SizedBox(height: 16),
+                      _ColorVariantGallery(product: p),
+                    ],
                     const SizedBox(height: 16),
                     _ActionGrid(
                       product: p,
@@ -257,7 +263,7 @@ class _ReferenceEditor extends StatefulWidget {
 }
 
 class _ReferenceEditorState extends State<_ReferenceEditor> {
-  ProductDescriptionTemplate _template = ProductDescriptionTemplate.catalogue;
+  ProductDescriptionTemplate _template = ProductDescriptionTemplate.whatsapp;
   bool _generating = false;
 
   Future<void> _generate() async {
@@ -452,6 +458,98 @@ class _HeroOverview extends StatelessWidget {
   void _openImage(BuildContext context, _SlideData slide) {
     if (slide.bytes == null) return;
     showImageViewer(context, images: [slide.bytes!], title: slide.title);
+  }
+}
+
+class _ColorVariantGallery extends StatelessWidget {
+  const _ColorVariantGallery({required this.product});
+
+  final Product product;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = product.colorVariants
+        .where((variant) => variant.imageBytes != null)
+        .toList();
+    return LiquidCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.palette_outlined,
+                color: Color(0xFF64E9FF),
+                size: 19,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Colour set images',
+                style: jost(fontSize: 14, weight: FontWeight.w700),
+              ),
+              const Spacer(),
+              Text('${colors.length}', style: jost(color: mutedText)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: colors.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              childAspectRatio: .82,
+            ),
+            itemBuilder: (context, index) {
+              final color = colors[index];
+              return InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => showImageViewer(
+                  context,
+                  images: [color.imageBytes!],
+                  title: color.name,
+                ),
+                child: Ink(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .04),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(8),
+                          ),
+                          child: Image.memory(
+                            color.imageBytes!,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          color.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: jost(fontSize: 12.5, weight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 }
 

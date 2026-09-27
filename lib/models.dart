@@ -16,6 +16,29 @@ enum ProductDescriptionTemplate {
   final String subtitle;
 }
 
+class ProductColorVariant {
+  ProductColorVariant({
+    String? id,
+    required this.name,
+    this.hex = '#808080',
+    this.generationInstruction = '',
+    this.imageBytes,
+    this.imageUrl,
+    this.selected = false,
+  }) : id = id ?? _recordId();
+
+  final String id;
+  String name;
+  String hex;
+  String generationInstruction;
+  Uint8List? imageBytes;
+  String? imageUrl;
+  bool selected;
+  bool isGenerating = false;
+  int progress = 0;
+  String? error;
+}
+
 class ChatMessage {
   ChatMessage({
     String? id,
@@ -84,6 +107,9 @@ class Product {
   String referenceDescription = '';
   String detectedColorSet = '';
   bool productNameDetected = false;
+  String memorySummary = '';
+  String? memoryLastMessageId;
+  final List<ProductColorVariant> colorVariants = [];
   final List<ChatMessage> chat = [];
 
   String get generatedDescription {

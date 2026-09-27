@@ -11,6 +11,24 @@ class SupabaseService implements ProductPersistence {
 
   final http.Client _client;
 
+  Future<Map<String, String>> loadPromptProfiles() async {
+    if (!CloudConfig.isConfigured) return {};
+    final response = await _client
+        .get(
+          Uri.parse(CloudConfig.endpoint('/v1/prompts')),
+          headers: CloudConfig.headers(),
+        )
+        .timeout(const Duration(seconds: 30));
+    _ensureSuccess(response, 'Prompt profile load');
+    final records = _object(response.body)['prompts'];
+    if (records is! List) return {};
+    return {
+      for (final record in records.whereType<Map<String, dynamic>>())
+        if (record['key'] is String && record['content'] is String)
+          record['key'] as String: (record['content'] as String).trim(),
+    };
+  }
+
   @override
   Future<List<Product>> loadProducts() async {
     if (!CloudConfig.isConfigured) return [];
@@ -64,6 +82,14 @@ class SupabaseService implements ProductPersistence {
       product.posterImageUrl,
       'poster',
     );
+
+    for (final variant in product.colorVariants) {
+      variant.imageUrl = await ensureImage(
+        variant.imageBytes,
+        variant.imageUrl,
+        'colour-${variant.name}',
+      );
+    }
 
     final messages = <Map<String, dynamic>>[];
     for (var position = 0; position < product.chat.length; position++) {
@@ -148,7 +174,9 @@ class SupabaseService implements ProductPersistence {
           ..referenceDescription =
               json['reference_description']?.toString() ?? ''
           ..detectedColorSet = json['detected_color_set']?.toString() ?? ''
-          ..productNameDetected = json['product_name_detected'] == true;
+          ..productNameDetected = json['product_name_detected'] == true
+          ..memorySummary = json['memory_summary']?.toString() ?? ''
+          ..memoryLastMessageId = json['memory_last_message_id'] as String?;
 
     final images = await Future.wait([
       _downloadImage(product.productImageUrl),
@@ -159,6 +187,25 @@ class SupabaseService implements ProductPersistence {
       ..productImage = images[0]
       ..colorSetImage = images[1]
       ..posterImage = images[2];
+
+    final variants = json['color_variants'];
+    if (variants is List) {
+      for (final record in variants.whereType<Map<String, dynamic>>()) {
+        final imageUrl = record['image_url'] as String?;
+        product.colorVariants.add(
+          ProductColorVariant(
+            id: record['id']?.toString(),
+            name: record['name']?.toString() ?? 'Colour',
+            hex: record['hex']?.toString() ?? '#808080',
+            generationInstruction:
+                record['generation_instruction']?.toString() ?? '',
+            imageUrl: imageUrl,
+            imageBytes: await _downloadImage(imageUrl),
+            selected: record['selected'] == true,
+          ),
+        );
+      }
+    }
 
     final messages = json['messages'];
     if (messages is List) {
@@ -222,6 +269,19 @@ class SupabaseService implements ProductPersistence {
     'product_image_url': product.productImageUrl,
     'color_set_image_url': product.colorSetImageUrl,
     'poster_image_url': product.posterImageUrl,
+    'memory_summary': product.memorySummary,
+    'memory_last_message_id': product.memoryLastMessageId,
+    'color_variants': [
+      for (final variant in product.colorVariants)
+        {
+          'id': variant.id,
+          'name': variant.name,
+          'hex': variant.hex,
+          'generation_instruction': variant.generationInstruction,
+          'image_url': variant.imageUrl,
+          'selected': variant.selected,
+        },
+    ],
   };
 
   static Map<String, dynamic> _messageToJson(

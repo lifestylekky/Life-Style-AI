@@ -6,11 +6,27 @@ import 'package:http/http.dart' as http;
 
 import 'cloud_config.dart';
 import 'models.dart';
+import 'supabase_service.dart';
 
 class AiService {
   static const String _model = 'deepseek-flash';
+  static Map<String, String> _promptProfiles = const {};
 
   static bool get isConfigured => CloudConfig.isConfigured;
+
+  static Future<void> refreshPromptProfiles(SupabaseService service) async {
+    try {
+      final profiles = await service.loadPromptProfiles();
+      if (profiles.isNotEmpty) _promptProfiles = profiles;
+    } catch (_) {
+      // Built-in fallbacks keep the app usable during a temporary config outage.
+    }
+  }
+
+  static String _profile(String key, String fallback) =>
+      _promptProfiles[key]?.trim().isNotEmpty == true
+      ? _promptProfiles[key]!.trim()
+      : fallback;
 
   static Future<String> chat({
     required String message,
@@ -24,14 +40,10 @@ class AiService {
 
     final system = StringBuffer()
       ..writeln(
-        'You are Life Style AI, a concise textile/product studio assistant.',
-      )
-      ..writeln(
-        'Help with boutique products, descriptions, catalogues, size charts, colours, and product presentation.',
-      )
-      ..writeln('Reply in the user\'s casual Tanglish style when appropriate.')
-      ..writeln(
-        'Be practical and specific. When images are attached, inspect them and use visible details in your reply.',
+        _profile(
+          'assistant_profile',
+          'You are Life Style AI, a concise ecommerce product-studio assistant. Be practical, specific, and never invent product facts. Inspect only images explicitly attached to the current request.',
+        ),
       );
 
     if (product != null) {
@@ -43,27 +55,18 @@ class AiService {
         )
         ..writeln(
           'Description: ${product.description.isEmpty ? '(none)' : product.description}',
-        )
-        ..writeln('Has product image: ${product.productImage != null}')
-        ..writeln('Has colour set image: ${product.colorSetImage != null}')
-        ..writeln('Has poster image: ${product.posterImage != null}');
+        );
+      if (product.memorySummary.isNotEmpty) {
+        system.writeln('Product memory: ${product.memorySummary}');
+      }
     }
-
-    final referenceImages = product == null
-        ? const <Uint8List>[]
-        : <Uint8List>[
-            if (product.productImage != null) product.productImage!,
-            if (product.colorSetImage != null) product.colorSetImage!,
-            if (product.posterImage != null) product.posterImage!,
-          ];
-    final requestImages = [...referenceImages, ...images];
 
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': system.toString()},
       for (final item in history) _toApiMessage(item),
       {
         'role': 'user',
-        'content': _buildUserContent(message: message, images: requestImages),
+        'content': _buildUserContent(message: message, images: images),
       },
     ];
 
@@ -82,22 +85,10 @@ class AiService {
 
     final system = StringBuffer()
       ..writeln(
-        'You are an expert ecommerce product photographer and FLUX prompt writer.',
-      )
-      ..writeln(
-        'Create one production-ready prompt for a premium ecommerce product image.',
-      )
-      ..writeln(
-        'Preserve the reference product identity, construction, material, colours, patterns, proportions, and visible branding exactly.',
-      )
-      ..writeln(
-        'Specify composition, camera angle, lighting, background, product placement, realistic material detail, clean shadows, and commercial retouching.',
-      )
-      ..writeln(
-        'Do not invent extra products, text, logos, watermarks, hands, or props unless the user explicitly asks for them.',
-      )
-      ..writeln(
-        'Return only the final FLUX prompt as plain text. Do not add a title, explanation, markdown, quotes, or alternatives.',
+        _profile(
+          'product_image',
+          'Create one production-ready English FLUX prompt for a premium ecommerce product image. Preserve the selected reference exactly and return only the final prompt.',
+        ),
       );
 
     if (product != null) {
@@ -110,15 +101,11 @@ class AiService {
         ..writeln(
           'Description: ${product.description.isEmpty ? '(none)' : product.description}',
         );
+      if (product.memorySummary.isNotEmpty) {
+        system.writeln('Product memory: ${product.memorySummary}');
+      }
     }
 
-    final referenceImages = product == null
-        ? const <Uint8List>[]
-        : <Uint8List>[
-            if (product.productImage != null) product.productImage!,
-            if (product.colorSetImage != null) product.colorSetImage!,
-          ];
-    final requestImages = [...referenceImages, ...images];
     final recentTextHistory = history
         .where((item) => item.text != 'Styling')
         .take(6)
@@ -136,7 +123,7 @@ class AiService {
         'content': _buildUserContent(
           message:
               'Create the final ecommerce image-generation prompt for this request: $message',
-          images: requestImages,
+          images: images,
         ),
       },
     ];
@@ -155,11 +142,11 @@ class AiService {
     List<Uint8List> images = const [],
     List<ChatMessage> history = const [],
   }) async {
-    final productImages = <Uint8List>[
-      if (product?.productImage != null) product!.productImage!,
-      if (product?.colorSetImage != null) product!.colorSetImage!,
-      ...images,
-    ];
+    final productImages = images.isNotEmpty
+        ? images
+        : <Uint8List>[
+            if (product?.productImage != null) product!.productImage!,
+          ];
     if (productImages.isEmpty) {
       throw StateError('Attach a product image before detecting colours.');
     }
@@ -167,21 +154,18 @@ class AiService {
       messages: [
         {
           'role': 'system',
-          'content': '''You are a textile ecommerce colour specialist.
-Inspect the supplied product images and return a concise colour-set report using exactly this template:
-PRIMARY: <commercial colour name>
-SECONDARY: <comma-separated colours or None>
-ACCENTS: <comma-separated colours or None>
-UNDERTONE: <warm, cool, or neutral>
-LISTING COLOURS: <customer-friendly comma-separated names>
-Do not identify the product or add commentary. Do not use markdown.''',
+          'content': _profile(
+            'color_detection',
+            'Inspect the supplied product reference and return valid JSON with summary and colors fields. Each color needs name, hex, and generation_instruction. Do not use markdown fences.',
+          ),
         },
         {
           'role': 'user',
           'content': _buildUserContent(
-            message: message.isEmpty
-                ? 'Detect the complete product colour set.'
-                : message,
+            message:
+                'Product: ${product?.name ?? 'Uncatalogued product'}\n'
+                '${product?.memorySummary.isNotEmpty == true ? 'Product memory: ${product!.memorySummary}\n' : ''}'
+                '${message.isEmpty ? 'Detect the complete product colour set.' : message}',
             images: productImages,
           ),
         },
@@ -205,12 +189,10 @@ Do not identify the product or add commentary. Do not use markdown.''',
       messages: [
         {
           'role': 'system',
-          'content':
-              '''You are a senior ecommerce art director and FLUX prompt writer.
-Study every supplied reference. Create one master prompt for a finished ecommerce poster that unifies the strongest generated product view with the original product references.
-Preserve product identity, construction, material, colours, patterns, proportions, and visible branding. Specify hierarchy, product placement, background, lighting, camera treatment, negative space, and premium commercial retouching.
-Do not request invented logos, unreadable copy, extra products, hands, or people unless explicitly requested.
-Return only the final English FLUX prompt as plain text.''',
+          'content': _profile(
+            'poster',
+            'Create one master English FLUX prompt for a finished ecommerce poster using only the supplied references. Preserve product identity and return only the prompt.',
+          ),
         },
         {
           'role': 'user',
@@ -218,6 +200,7 @@ Return only the final English FLUX prompt as plain text.''',
             message:
                 'Product: ${product?.name ?? 'Uncatalogued product'}\n'
                 'Reference notes: ${product?.referenceDescription ?? '(none)'}\n'
+                '${product?.memorySummary.isNotEmpty == true ? 'Product memory: ${product!.memorySummary}\n' : ''}'
                 'Poster request: $message',
             images: images,
           ),
@@ -234,10 +217,10 @@ Return only the final English FLUX prompt as plain text.''',
       messages: [
         {
           'role': 'system',
-          'content':
-              '''Identify the actual ecommerce product category from the image.
-Return only a natural 2-5 word product name combining the visible material or construction with the real category, for example Cotton Nightwear, Ribbed Knit Top, Printed Rayon Kurti, or Linen Blend Shirt.
-Never use a colour as the main product name. Do not mention background, model, gender, brand, style adjectives, punctuation, or explanations.''',
+          'content': _profile(
+            'product_name',
+            'Identify the actual ecommerce product. Return only a natural 2-5 word product name using material or construction and category. Never use colour as the main name.',
+          ),
         },
         {
           'role': 'user',
@@ -257,69 +240,127 @@ Never use a colour as the main product name. Do not mention background, model, g
     required Product product,
     required ProductDescriptionTemplate template,
   }) async {
-    final images = <Uint8List>[
-      if (product.productImage != null) product.productImage!,
-      if (product.colorSetImage != null) product.colorSetImage!,
-      if (product.posterImage != null) product.posterImage!,
-    ];
-    final templateRules = switch (template) {
+    final templateKey = switch (template) {
+      ProductDescriptionTemplate.catalogue => 'description_catalogue',
+      ProductDescriptionTemplate.whatsapp => 'description_whatsapp',
+      ProductDescriptionTemplate.social => 'description_social',
+    };
+    final fallback = switch (template) {
       ProductDescriptionTemplate.catalogue =>
-        '''Use exactly this layout:
-<PRODUCT NAME>
-<one polished 2-sentence catalogue paragraph>
-
-Material: <value or Not specified>
-Available sizes: <value or Not specified>
-Colours: <value or Not specified>
-Price: <value or Contact for price>
-Ideal for: <short use cases>
-Care: <only when supported, otherwise Not specified>''',
+        'Write an accurate catalogue listing with exact product name, material, sizes, colours, price, use, and care. Never invent facts.',
       ProductDescriptionTemplate.whatsapp =>
-        '''Use exactly this layout:
-<PRODUCT NAME>
-<one friendly sales sentence>
-
-Material: <value or Not specified>
-Sizes: <value or Not specified>
-Colours: <value or Not specified>
-Price: <value or Contact for price>
-
-Message us to order.''',
+        '''Return a WhatsApp listing with 🛍 *PRODUCT NAME*, 📦 _CATEGORY_, each 📏 size and 💰 LKR price tier, location 12 Main Street Kattankudy 03, contacts 0767051440 / 0768509808, WhatsApp group https://chat.whatsapp.com/D6oa6LZ5zeB4mApF25EPrb, island-wide delivery, Life Style, and Specialist in UnderGarments. Use keycap emoji digits for every price.''',
       ProductDescriptionTemplate.social =>
-        '''Use exactly this layout:
-<PRODUCT NAME>
-<two short engaging caption sentences>
-
-Material: <value or Not specified>
-Sizes: <value or Not specified>
-Colours: <value or Not specified>
-Price: <value or Contact for price>
-
-<3-5 relevant hashtags>''',
+        'Write an accurate concise social caption with exact product name, sizes, prices, material, colours, and 3-5 hashtags.',
     };
     return _sendMessages(
       messages: [
-        {
-          'role': 'system',
-          'content': '''You write accurate ecommerce product descriptions.
-Extract loosely typed price, size, material, and product details from the reference notes. Use the supplied product name and category consistently. Inspect images for visible product facts, but never invent factual specifications. Preserve currency exactly as entered. Return only the completed template with no markdown fences or explanation.
-
-$templateRules''',
-        },
+        {'role': 'system', 'content': _profile(templateKey, fallback)},
         {
           'role': 'user',
           'content': _buildUserContent(
             message:
                 'Product name: ${product.name}\n'
                 'Detected colour set: ${product.detectedColorSet.isEmpty ? '(none)' : product.detectedColorSet}\n'
+                'Product memory: ${product.memorySummary.isEmpty ? '(none)' : product.memorySummary}\n'
                 'Reference notes: ${product.referenceDescription}',
-            images: images,
+            images: [if (product.productImage != null) product.productImage!],
           ),
         },
       ],
       temperature: 0.35,
       throwOnError: true,
     );
+  }
+
+  static Future<bool> referenceMatches({
+    required Uint8List savedProduct,
+    required Uint8List newReference,
+  }) async {
+    final result = await _sendMessages(
+      messages: [
+        {
+          'role': 'system',
+          'content': _profile(
+            'reference_match',
+            'Compare image 1 and image 2. Return only SAME if they show the same underlying product or a colour variant; otherwise return only DIFFERENT.',
+          ),
+        },
+        {
+          'role': 'user',
+          'content': _buildUserContent(
+            message:
+                'Image 1 is the saved product. Image 2 is the new reference.',
+            images: [savedProduct, newReference],
+          ),
+        },
+      ],
+      temperature: 0,
+      throwOnError: true,
+    );
+    return _cleanSingleLine(result).toUpperCase().startsWith('SAME');
+  }
+
+  static Future<String> colorVariantPrompt({
+    required Product product,
+    required ProductColorVariant color,
+    required Uint8List reference,
+  }) async {
+    final result = await _sendMessages(
+      messages: [
+        {
+          'role': 'system',
+          'content': _profile(
+            'color_variant',
+            'Create one FLUX editing prompt that changes only the selected product colour while preserving every other product and scene detail. Return only the prompt.',
+          ),
+        },
+        {
+          'role': 'user',
+          'content': _buildUserContent(
+            message:
+                'Product: ${product.name}\nRequested colour: ${color.name} (${color.hex})\nColour instruction: ${color.generationInstruction}\n${product.memorySummary.isEmpty ? '' : 'Product memory: ${product.memorySummary}'}',
+            images: [reference],
+          ),
+        },
+      ],
+      temperature: 0.2,
+      throwOnError: true,
+    );
+    return _cleanPrompt(result);
+  }
+
+  static Future<String> summarizeProductMemory({
+    required Product product,
+    required List<ChatMessage> messages,
+  }) async {
+    final exchange = messages
+        .where((message) => message.kind == ChatMessageKind.text)
+        .map(
+          (message) =>
+              '${message.isUser ? 'User' : 'Assistant'}: ${message.text}',
+        )
+        .join('\n');
+    final result = await _sendMessages(
+      messages: [
+        {
+          'role': 'system',
+          'content': _profile(
+            'memory_summary',
+            'Update the product memory using the previous memory and newest exchange. Return no more than 100 words and prioritize recent confirmed facts.',
+          ),
+        },
+        {
+          'role': 'user',
+          'content':
+              'Product: ${product.name}\nPrevious memory: ${product.memorySummary.isEmpty ? '(none)' : product.memorySummary}\nNewest exchange:\n$exchange',
+        },
+      ],
+      temperature: 0.15,
+      throwOnError: true,
+    );
+    final words = result.trim().split(RegExp(r'\s+'));
+    return words.length <= 100 ? result.trim() : words.take(100).join(' ');
   }
 
   static Future<String> _sendMessages({
@@ -408,12 +449,7 @@ $templateRules''',
   static Map<String, dynamic> _toApiMessage(ChatMessage message) {
     return {
       'role': message.isUser ? 'user' : 'assistant',
-      'content': message.isUser
-          ? _buildUserContent(
-              message: message.prompt ?? message.text,
-              images: message.imageBytesList,
-            )
-          : message.text,
+      'content': message.isUser ? message.prompt ?? message.text : message.text,
     };
   }
 

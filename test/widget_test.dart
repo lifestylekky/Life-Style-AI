@@ -37,10 +37,7 @@ void main() {
       final progress = <int>[];
       final client = MockClient((request) async {
         if (request.method == 'POST') {
-          expect(
-            request.url.path,
-            '/functions/v1/flux-proxy/v1/flux-pro-1.1',
-          );
+          expect(request.url.path, '/functions/v1/flux-proxy/v1/flux-pro-1.1');
           expect(request.url.host, 'xlgkxryniiokathvmtxo.supabase.co');
           expect(request.headers['x-key'], isNull);
           expect(request.headers, contains('x-app-token'));
@@ -269,7 +266,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('768 × 1024 · FLUX Kontext Pro'), findsOneWidget);
-    expect(product.posterImage, same(image));
+    expect(product.productImage, same(image));
     expect(find.text('Download'), findsOneWidget);
     expect(find.text('Reference'), findsOneWidget);
 
@@ -384,6 +381,80 @@ void main() {
     expect(product.chat.last.text, 'Generated product poster');
   });
 
+  testWidgets('selectable colour variants generate into their matching row', (
+    tester,
+  ) async {
+    final reference = Uint8List.fromList(
+      File('preview-greeting.png').readAsBytesSync(),
+    );
+    final generated = Uint8List.fromList(reference);
+    final product = Product(id: 'colour-product', name: 'Cotton Nightwear')
+      ..productImage = reference;
+    product.colorVariants.addAll([
+      ProductColorVariant(
+        name: 'Ruby Red',
+        hex: '#C72C48',
+        generationInstruction: 'deep ruby red',
+      ),
+      ProductColorVariant(
+        name: 'Ocean Blue',
+        hex: '#2474A6',
+        generationInstruction: 'clean ocean blue',
+      ),
+    ]);
+    product.chat.add(
+      ChatMessage(
+        text: 'Two suitable colours.',
+        isUser: false,
+        actionName: ChatActionMode.detectColors.name,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          product: product,
+          colorVariantPromptRequest:
+              ({required product, required color, required reference}) async {
+                expect(color.name, 'Ruby Red');
+                expect(reference, same(product.productImage));
+                return 'Recolour only the garment to ruby red';
+              },
+          productImageRequest:
+              ({
+                required prompt,
+                required size,
+                referenceImage,
+                onProgress,
+              }) async {
+                expect(prompt, contains('ruby red'));
+                expect(referenceImage, same(reference));
+                onProgress?.call(100);
+                return GeneratedProductImage(
+                  bytes: generated,
+                  sourceUrl: 'https://example.com/ruby.jpg',
+                  width: size.width,
+                  height: size.height,
+                );
+              },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('2 extracted colours'), findsOneWidget);
+    expect(find.text('Ruby Red'), findsOneWidget);
+    expect(find.text('Ocean Blue'), findsOneWidget);
+    expect(find.text('Generate all'), findsOneWidget);
+    expect(find.text('Selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Generate Ruby Red'));
+    await tester.pump(const Duration(milliseconds: 800));
+
+    expect(product.colorVariants.first.imageBytes, same(generated));
+    expect(product.colorSetImage, same(generated));
+  });
+
   testWidgets('reference notes generate and save a templated description', (
     tester,
   ) async {
@@ -413,10 +484,6 @@ void main() {
       find.byType(TextField).last,
       'soft cotton, size M-XXL, Rs 2450',
     );
-    await tester.tap(find.textContaining('Catalogue -'));
-    await tester.pump();
-    await tester.tap(find.textContaining('WhatsApp -').last);
-    await tester.pump();
     await tester.ensureVisible(find.text('Generate description'));
     await tester.tap(find.text('Generate description'));
     await tester.pump();

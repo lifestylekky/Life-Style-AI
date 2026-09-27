@@ -4,14 +4,17 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'chat_screen.dart';
+import 'ai_service.dart';
 import 'liquid_ui.dart';
 import 'models.dart';
 import 'supabase_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  ProductStore.instance.configure(SupabaseService());
+  final cloud = SupabaseService();
+  ProductStore.instance.configure(cloud);
   unawaited(ProductStore.instance.load());
+  unawaited(AiService.refreshPromptProfiles(cloud));
   runApp(const LifeStyleApp());
 }
 

@@ -10,6 +10,9 @@ generation, Supabase product/chat persistence, and GitHub-backed image storage.
   Function secrets and are never bundled in the app.
 - Product records and ordered chat messages live in Supabase Postgres with
   server-generated timestamps.
+- AI identity, generation, catalogue, safety, and memory prompts live in the
+  `ai_prompt_profiles` table. Enabled prompt changes take effect the next time
+  the app starts, without rebuilding the APK.
 - Reference and generated image bytes live under `app-images/` in the public
   GitHub repository; Supabase stores their stable raw URLs.
 - Database tables have RLS enabled and no client policies. The Edge Function is
@@ -55,6 +58,27 @@ Verify Flux authentication:
 curl https://xlgkxryniiokathvmtxo.supabase.co/functions/v1/flux-proxy/health
 ```
 
+## AI profiles and product memory
+
+Edit prompt rows from **Supabase Dashboard → Table Editor →
+`ai_prompt_profiles`**. Keep the existing `key` values because each workflow
+loads its profile by key. Set `enabled` to false to make the app use its bundled
+fallback for that profile.
+
+Product chat memory is maintained silently after the conversation passes 100
+words. The stored summary is capped at 100 words and is combined with only the
+most recent messages. Historical chat images are not resent to DeepSeek;
+current attachments are the only image references sent for ordinary chat and
+product-image prompting.
+
+Generated images are routed by quick action:
+
+- **Generate product image** updates the product overview image.
+- **Detect colour set** creates selectable colour variants; per-colour, all,
+  and selected generation results are stored in the colour-set section.
+- **Generate poster** combines the product's generated references and stores
+  the result in the poster section.
+
 ## Build Android
 
 `APP_CLIENT_TOKEN` must match the Supabase secret. It protects the private app
@@ -78,4 +102,5 @@ flutter test
 ```
 
 The test suite covers chat workflows, Flux submission/polling/download behavior,
-poster generation, product description generation, and route disposal behavior.
+poster generation, selectable colour variants, product description generation,
+and route disposal behavior.
