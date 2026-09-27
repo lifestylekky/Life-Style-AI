@@ -37,9 +37,13 @@ void main() {
       final progress = <int>[];
       final client = MockClient((request) async {
         if (request.method == 'POST') {
-          expect(request.url.path, '/v1/flux-pro-1.1');
-          expect(request.url.host, '127.0.0.1');
+          expect(
+            request.url.path,
+            '/functions/v1/flux-proxy/v1/flux-pro-1.1',
+          );
+          expect(request.url.host, 'xlgkxryniiokathvmtxo.supabase.co');
           expect(request.headers['x-key'], isNull);
+          expect(request.headers, contains('x-app-token'));
           final body = jsonDecode(request.body) as Map<String, dynamic>;
           expect(body['prompt'], 'Studio product photo');
           expect(body['width'], 1024);

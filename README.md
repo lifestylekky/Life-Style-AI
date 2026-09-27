@@ -1,98 +1,80 @@
 # Life Style AI
 
-Flutter ecommerce product studio with DeepSeek chat and Flux Kontext Pro image
-generation through FluxAPI.ai.
+Flutter ecommerce product studio with DeepSeek chat, Flux Kontext Pro image
+generation, Supabase product/chat persistence, and GitHub-backed image storage.
 
-## Run on the web
+## Production architecture
 
-The included proxy keeps provider and GitHub credentials out of the Flutter
-bundle. Start it before launching the app:
+- The Flutter app calls one Supabase Edge Function over HTTPS.
+- Flux, DeepSeek, GitHub, and Supabase service-role credentials stay in Edge
+  Function secrets and are never bundled in the app.
+- Product records and ordered chat messages live in Supabase Postgres with
+  server-generated timestamps.
+- Reference and generated image bytes live under `app-images/` in the public
+  GitHub repository; Supabase stores their stable raw URLs.
+- Database tables have RLS enabled and no client policies. The Edge Function is
+  the only database writer.
 
-```bash
-# Terminal 1: text-to-image only
-FLUXAPI_KEY=your_fluxapi_key dart run tool/flux_proxy.dart
+## Deploy Supabase
 
-# Terminal 1: enable attached reference images through a public GitHub repo
-FLUXAPI_KEY=your_fluxapi_key \
-GITHUB_TOKEN=your_fine_grained_token \
-GITHUB_REPOSITORY=owner/public-repo \
-dart run tool/flux_proxy.dart
-
-# Terminal 2
-flutter run -d web-server --web-port 8082 \
-  --dart-define=FLUX_PROXY_URL=http://127.0.0.1:8787
-```
-
-The GitHub token needs Contents read/write access to the configured public
-repository. Optional `GITHUB_BRANCH` and `GITHUB_UPLOAD_PATH` values default to
-`main` and `flux-references`. Reference files are deleted after FluxAPI.ai
-finishes, but Git history and CDN caches mean they must still be considered
-public.
-
-When the proxy is behind a reverse proxy that does not forward the original
-host correctly, set `PUBLIC_BASE_URL` to its public origin, for example
-`https://flux-proxy.example.com`. Local development detects `127.0.0.1:8787`
-automatically.
-
-For permanent phone access, deploy the stateless Supabase Edge Function in
-`supabase/functions/flux-proxy`. GitHub Pages cannot host this API because it is
-static hosting; the public GitHub repository is used only for temporary Flux
-reference-image URLs.
-
-Link the Supabase CLI to a project, configure the server-only secrets, and
-deploy the function:
+Link the project and apply migrations:
 
 ```bash
 npx supabase login
-npx supabase link --project-ref YOUR_PROJECT_REF
-
-npx supabase secrets set \
-  FLUXAPI_KEY=your_fluxapi_key \
-  GITHUB_TOKEN=your_fine_grained_token \
-  GITHUB_REPOSITORY=lifestylekky/Life-Style-AI \
-  PROXY_SIGNING_SECRET=use_a_long_random_secret
-
-npx supabase functions deploy flux-proxy --no-verify-jwt
+npx supabase link --project-ref xlgkxryniiokathvmtxo
+npx supabase db push --linked
 ```
 
-Verify the deployment and build the release app against its public HTTPS URL:
+Configure these Edge Function secrets in the Supabase dashboard or CLI:
+
+```text
+FLUXAPI_KEY
+DEEPSEEK_API_KEY
+GITHUB_TOKEN
+GITHUB_REPOSITORY=lifestylekky/Life-Style-AI
+GITHUB_BRANCH=assets
+PROXY_SIGNING_SECRET
+APP_CLIENT_TOKEN
+```
+
+The GitHub token needs access only to `lifestylekky/Life-Style-AI` with
+repository **Contents: Read and write** permission. Image commits stay on the
+`assets` branch so they do not advance the application source branch. Deploy
+directly to Supabase; local Docker is not required:
 
 ```bash
-curl https://YOUR_PROJECT_REF.supabase.co/functions/v1/flux-proxy/health
+npx supabase functions deploy flux-proxy \
+  --no-verify-jwt \
+  --project-ref xlgkxryniiokathvmtxo
+```
 
+Verify Flux authentication:
+
+```bash
+curl https://xlgkxryniiokathvmtxo.supabase.co/functions/v1/flux-proxy/health
+```
+
+## Build Android
+
+`APP_CLIENT_TOKEN` must match the Supabase secret. It protects the private app
+API from anonymous internet traffic; provider keys must never be passed as Dart
+defines.
+
+```bash
 flutter build apk --release \
-  --dart-define=FLUX_PROXY_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/flux-proxy
+  --dart-define=SUPABASE_FUNCTION_URL=https://xlgkxryniiokathvmtxo.supabase.co/functions/v1/flux-proxy \
+  --dart-define=APP_CLIENT_TOKEN=your_app_client_token
 ```
 
-Install that release APK on the phone. It works on Wi-Fi or mobile data without
-the development computer. Never expose `FLUXAPI_KEY`, `GITHUB_TOKEN`, or
-`PROXY_SIGNING_SECRET` through `--dart-define`; all Flutter targets use the
-hosted proxy.
+Install `build/app/outputs/flutter-apk/app-release.apk`. The release works over
+Wi-Fi or mobile data without the development computer.
 
-## Run on mobile
-
-Mobile builds also require the proxy because embedding either provider secret
-in an APK or IPA would expose it. For an Android emulator, start the proxy on
-the development machine and use Android's host alias:
+## Verification
 
 ```bash
-FLUX_PROXY_HOST=0.0.0.0 \
-FLUXAPI_KEY=your_fluxapi_key \
-GITHUB_TOKEN=your_fine_grained_token \
-GITHUB_REPOSITORY=owner/public-repo \
-dart run tool/flux_proxy.dart
-
-flutter run -d emulator-5554 \
-  --dart-define=FLUX_PROXY_URL=http://10.0.2.2:8787
+flutter analyze
+flutter test
 ```
 
-For a physical device on the same Wi-Fi network, replace `10.0.2.2` with the
-development machine's LAN address, such as `192.168.1.20`. Allow port `8787`
-through the local firewall. Android debug builds permit this local HTTP setup;
-production Android and iOS builds should point `FLUX_PROXY_URL` to the deployed
-Supabase Edge Function described above.
-
-## Getting Started
-
-- [Flutter setup](https://docs.flutter.dev/get-started/install)
-- [FluxAPI.ai quickstart](https://docs.fluxapi.ai/quickstart)
+The test suite covers chat workflows, Flux submission/polling/download behavior,
+poster generation, product description generation, and route disposal behavior.
