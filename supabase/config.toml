@@ -1,0 +1,4 @@
+project_id = "life-style-ai"
+
+[functions.flux-proxy]
+verify_jwt = false
