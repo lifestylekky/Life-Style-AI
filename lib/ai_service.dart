@@ -83,13 +83,25 @@ class AiService {
       throw StateError('DeepSeek API key is not configured for this build.');
     }
 
+    if (images.isEmpty) {
+      throw StateError('Select a product reference image before generating.');
+    }
+
     final system = StringBuffer()
       ..writeln(
         _profile(
           'product_image',
-          'Create one production-ready English FLUX prompt for a premium ecommerce product image. Preserve the selected reference exactly and return only the final prompt.',
+          'Analyze the attached reference product and return only one faithful, premium ecommerce FLUX prompt. Preserve every visible product detail, show the complete garment, and keep the final response under 2999 characters.',
         ),
       );
+
+    if (message.trim().isNotEmpty) {
+      system
+        ..writeln('\n==================================================')
+        ..writeln('USER REQUEST')
+        ..writeln('==================================================')
+        ..writeln(message.trim());
+    }
 
     if (product != null) {
       system
@@ -106,23 +118,13 @@ class AiService {
       }
     }
 
-    final recentTextHistory = history
-        .where((item) => item.text != 'Styling')
-        .take(6)
-        .map(
-          (item) => <String, dynamic>{
-            'role': item.isUser ? 'user' : 'assistant',
-            'content': item.text,
-          },
-        );
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': system.toString()},
-      ...recentTextHistory,
       {
         'role': 'user',
         'content': _buildUserContent(
           message:
-              'Create the final ecommerce image-generation prompt for this request: $message',
+              'The attached image is the real product reference. Return the final FLUX-ready prompt only.',
           images: images,
         ),
       },
@@ -133,7 +135,7 @@ class AiService {
       temperature: 0.35,
       throwOnError: true,
     );
-    return _cleanPrompt(prompt);
+    return _limitFluxPrompt(_cleanPrompt(prompt));
   }
 
   static Future<String> detectColorSet({
@@ -432,6 +434,17 @@ class AiService {
       prompt = prompt.substring(1, prompt.length - 1).trim();
     }
     return prompt;
+  }
+
+  static String _limitFluxPrompt(String prompt) {
+    const limit = 2999;
+    if (prompt.length <= limit) return prompt;
+    final truncated = prompt.substring(0, limit);
+    final sentenceEnd = truncated.lastIndexOf(RegExp(r'[.!?]'));
+    return (sentenceEnd >= limit ~/ 2
+            ? truncated.substring(0, sentenceEnd + 1)
+            : truncated)
+        .trim();
   }
 
   static String _cleanSingleLine(String value) {

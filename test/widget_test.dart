@@ -99,6 +99,26 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('home chat exposes a multiline composer and theme menu', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const LifeStyleApp());
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(seconds: 2));
+
+    final composer = tester.widget<TextField>(find.byType(TextField).last);
+    expect(composer.minLines, 1);
+    expect(composer.maxLines, 6);
+    expect(composer.keyboardType, TextInputType.multiline);
+    expect(composer.textInputAction, TextInputAction.newline);
+
+    await tester.tap(find.byTooltip('Open menu'));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Inventory'), findsOneWidget);
+    expect(find.text('Dark theme'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('image chat finishes after the chat route is disposed', (
     tester,
   ) async {

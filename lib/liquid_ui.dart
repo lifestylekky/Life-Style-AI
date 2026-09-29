@@ -2,7 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-/// Shared strict liquid design language for the whole app.
+/// Shared product-studio design language for the whole app.
 const List<Color> liquidSpectrum = [
   Color(0xFF64E9FF),
   Color(0xFF4F7CFF),
@@ -11,11 +11,31 @@ const List<Color> liquidSpectrum = [
   Color(0xFF64E9FF),
 ];
 
-const Color bgColor = Color(0xFF06070D);
-const Color surfaceColor = Color(0xFF10111C);
-const Color surfaceSoft = Color(0xFF171827);
-const Color strokeColor = Color(0x1AFFFFFF);
-const Color mutedText = Color(0x99FFFFFF);
+final ValueNotifier<ThemeMode> appThemeMode = ValueNotifier(ThemeMode.light);
+
+bool get isDarkTheme => appThemeMode.value == ThemeMode.dark;
+
+Color get bgColor =>
+    isDarkTheme ? const Color(0xFF06070D) : const Color(0xFFF7F8FC);
+Color get surfaceColor =>
+    isDarkTheme ? const Color(0xFF10111C) : const Color(0xFFFFFFFF);
+Color get surfaceSoft =>
+    isDarkTheme ? const Color(0xFF171827) : const Color(0xFFF0F3F8);
+Color get strokeColor =>
+    isDarkTheme ? const Color(0x1AFFFFFF) : const Color(0x160E1726);
+Color get mutedText =>
+    isDarkTheme ? const Color(0x99FFFFFF) : const Color(0x991D2939);
+Color get appTextColor =>
+    isDarkTheme ? const Color(0xFFF8FAFF) : const Color(0xFF172033);
+
+Color appForeground(BuildContext context, {double opacity = 1}) =>
+    appTextColor.withValues(alpha: opacity);
+
+void toggleAppTheme() {
+  appThemeMode.value = appThemeMode.value == ThemeMode.dark
+      ? ThemeMode.light
+      : ThemeMode.dark;
+}
 
 LinearGradient liquidGradient({
   AlignmentGeometry begin = Alignment.topLeft,
@@ -42,7 +62,8 @@ BoxDecoration glassDecoration({
     border: Border.all(color: strokeColor),
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withValues(alpha: 0.32),
+        color: (isDarkTheme ? Colors.black : const Color(0xFF203050))
+            .withValues(alpha: isDarkTheme ? .32 : .08),
         blurRadius: 22,
         offset: const Offset(0, 10),
       ),
@@ -65,28 +86,30 @@ class LiquidScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        const Positioned.fill(child: ColoredBox(color: bgColor)),
-        AmbientBlob(
-          phase: phase,
-          size: 440,
-          color: const Color(0xFF2F5BFF),
-          dx: -120 + 80 * phase,
-          dy: -110,
-        ),
-        AmbientBlob(
-          phase: phase + .42,
-          size: 360,
-          color: const Color(0xFFB24BFF),
-          dx: MediaQuery.sizeOf(context).width - 210,
-          dy: 130,
-        ),
-        AmbientBlob(
-          phase: phase + .74,
-          size: 300,
-          color: const Color(0xFF16C8D8),
-          dx: -80,
-          dy: MediaQuery.sizeOf(context).height - 250,
-        ),
+        Positioned.fill(child: ColoredBox(color: bgColor)),
+        if (isDarkTheme) ...[
+          AmbientBlob(
+            phase: phase,
+            size: 440,
+            color: const Color(0xFF2F5BFF),
+            dx: -120 + 80 * phase,
+            dy: -110,
+          ),
+          AmbientBlob(
+            phase: phase + .42,
+            size: 360,
+            color: const Color(0xFFB24BFF),
+            dx: MediaQuery.sizeOf(context).width - 210,
+            dy: 130,
+          ),
+          AmbientBlob(
+            phase: phase + .74,
+            size: 300,
+            color: const Color(0xFF16C8D8),
+            dx: -80,
+            dy: MediaQuery.sizeOf(context).height - 250,
+          ),
+        ],
         child,
       ],
     );
@@ -225,9 +248,13 @@ class LiquidSendButton extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: enabled ? liquidGradient(opacity: .85) : null,
-              color: enabled ? null : Colors.white.withValues(alpha: .07),
+              color: enabled
+                  ? null
+                  : appTextColor.withValues(alpha: isDarkTheme ? .07 : .05),
               border: Border.all(
-                color: Colors.white.withValues(alpha: enabled ? .12 : .06),
+                color: appTextColor.withValues(
+                  alpha: enabled ? (isDarkTheme ? .12 : .1) : .06,
+                ),
               ),
               boxShadow: enabled
                   ? [
@@ -240,7 +267,9 @@ class LiquidSendButton extends StatelessWidget {
             ),
             child: Icon(
               Icons.arrow_upward_rounded,
-              color: Colors.white.withValues(alpha: enabled ? .95 : .45),
+              color: enabled
+                  ? Colors.white
+                  : appTextColor.withValues(alpha: .45),
               size: 22,
             ),
           ),
@@ -266,7 +295,7 @@ class LiquidIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip ?? '',
       child: Material(
-        color: Colors.white.withValues(alpha: .06),
+        color: appTextColor.withValues(alpha: isDarkTheme ? .06 : .045),
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
@@ -276,7 +305,7 @@ class LiquidIconButton extends StatelessWidget {
             height: 42,
             child: Icon(
               icon,
-              color: Colors.white.withValues(alpha: .82),
+              color: appTextColor.withValues(alpha: .82),
               size: 21,
             ),
           ),
@@ -289,7 +318,7 @@ class LiquidIconButton extends StatelessWidget {
 TextStyle jost({
   double fontSize = 15,
   FontWeight weight = FontWeight.w400,
-  Color color = Colors.white,
+  Color? color,
   double? letterSpacing,
   double? height,
 }) {
@@ -299,6 +328,6 @@ TextStyle jost({
     fontWeight: weight,
     letterSpacing: letterSpacing,
     height: height,
-    color: color,
+    color: color ?? appTextColor,
   );
 }

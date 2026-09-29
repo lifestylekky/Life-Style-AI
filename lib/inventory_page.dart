@@ -51,7 +51,7 @@ class _InventoryPageState extends State<InventoryPage>
         backgroundColor: surfaceColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(24),
-          side: const BorderSide(color: strokeColor),
+          side: BorderSide(color: strokeColor),
         ),
         title: Text(
           'Delete product?',

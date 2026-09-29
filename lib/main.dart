@@ -23,20 +23,41 @@ class LifeStyleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Life Style AI',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: bgColor,
-        useMaterial3: true,
-        fontFamily: 'sans-serif',
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF64E9FF),
-          surface: surfaceColor,
-        ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeMode,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'Life Style AI',
+        debugShowCheckedModeBanner: false,
+        themeMode: mode,
+        theme: _appTheme(Brightness.light),
+        darkTheme: _appTheme(Brightness.dark),
+        home: const RootScreen(),
       ),
-      home: const RootScreen(),
+    );
+  }
+
+  ThemeData _appTheme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    return ThemeData(
+      brightness: brightness,
+      scaffoldBackgroundColor: dark
+          ? const Color(0xFF06070D)
+          : const Color(0xFFF7F8FC),
+      useMaterial3: true,
+      fontFamily: 'sans-serif',
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF267CFF),
+        brightness: brightness,
+        surface: dark ? const Color(0xFF10111C) : Colors.white,
+      ),
+      drawerTheme: DrawerThemeData(
+        backgroundColor: dark ? const Color(0xFF10111C) : Colors.white,
+        surfaceTintColor: Colors.transparent,
+      ),
+      appBarTheme: AppBarTheme(
+        foregroundColor: dark ? Colors.white : const Color(0xFF172033),
+        surfaceTintColor: Colors.transparent,
+      ),
     );
   }
 }

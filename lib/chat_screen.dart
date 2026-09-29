@@ -489,10 +489,19 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     ProductImageSize size,
   ) async {
     try {
+      final promptReferences = images.isNotEmpty
+          ? images
+          : <Uint8List>[
+              if (widget.product?.productImage != null)
+                widget.product!.productImage!,
+            ];
+      if (promptReferences.isEmpty) {
+        throw StateError('Attach or select a product reference image first.');
+      }
       final generationPrompt = await widget.imagePromptRequest(
         message: text,
         product: widget.product,
-        images: images,
+        images: promptReferences,
         history: history,
       );
       if (generationPrompt.trim().isEmpty) {
@@ -504,9 +513,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         kind: ChatMessageKind.crafting,
         progress: 1,
       );
-      final productReference = images.isNotEmpty
-          ? images.first
-          : widget.product?.productImage;
+      final productReference = promptReferences.first;
       final generated = await widget.productImageRequest(
         prompt: generationPrompt,
         size: size,
@@ -1083,6 +1090,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bgColor,
+      drawer: widget.product == null ? const _HomeDrawer() : null,
       body: AnimatedBuilder(
         animation: _flow,
         builder: (context, _) {
@@ -1114,6 +1122,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
       child: Row(
         children: [
+          if (widget.product == null) ...[
+            Builder(
+              builder: (drawerContext) => LiquidIconButton(
+                icon: Icons.menu_rounded,
+                tooltip: 'Open menu',
+                onTap: () => Scaffold.of(drawerContext).openDrawer(),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           const SparkleIcon(size: 30),
           const SizedBox(width: 12),
           ShaderMask(
@@ -1125,7 +1143,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 fontSize: 20,
                 weight: FontWeight.w700,
                 letterSpacing: 1.2,
-                color: Colors.white,
+                color: appTextColor,
               ),
             ),
           ),
@@ -1388,6 +1406,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
               ),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 _ComposerToolButton(
                   icon: Icons.auto_awesome_outlined,
@@ -1405,10 +1424,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 Expanded(
                   child: TextField(
                     controller: _input,
-                    onSubmitted: (_) => _send(),
+                    onChanged: (_) => setState(() {}),
                     style: jost(fontSize: 15),
                     cursorColor: const Color(0xFF64E9FF),
-                    textInputAction: TextInputAction.send,
+                    minLines: 1,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
                       hintText: switch (_actionMode) {
                         ChatActionMode.productImage =>
@@ -1422,7 +1444,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       hintStyle: jost(
                         fontSize: 15,
                         weight: FontWeight.w300,
-                        color: Colors.white.withValues(alpha: .38),
+                        color: mutedText.withValues(alpha: .72),
                       ),
                       border: InputBorder.none,
                       isDense: true,
@@ -1434,6 +1456,66 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeDrawer extends StatelessWidget {
+  const _HomeDrawer();
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Drawer(
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const SparkleIcon(size: 28),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Life Style AI',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: jost(fontSize: 19, weight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              ListTile(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: Text('Inventory', style: jost(weight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const InventoryPage()),
+                  );
+                },
+              ),
+              const Spacer(),
+              Divider(color: strokeColor),
+              SwitchListTile.adaptive(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                secondary: Icon(
+                  dark ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                ),
+                title: Text('Dark theme', style: jost(weight: FontWeight.w600)),
+                value: dark,
+                onChanged: (_) => toggleAppTheme(),
+              ),
+            ],
+          ),
         ),
       ),
     );
